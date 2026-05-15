@@ -53,6 +53,8 @@
     padding: 12px; z-index: 1100; display: none;
   }
   .filter-pill.open .pill-popover { display: block; }
+  /* Rightmost pill: anchor its popover to the right edge so it opens leftward and stays in the viewport */
+  #pill-listed .pill-popover { left: auto; right: 0; }
   .pill-popover label.row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 13px; font-weight: 500; cursor: pointer; }
   .pill-popover label.row:hover { background: var(--blue-soft); border-radius: 4px; }
   .pill-popover input[type=checkbox] { accent-color: var(--blue); }
