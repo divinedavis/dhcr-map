@@ -76,7 +76,7 @@
   .empty { padding: 60px 20px; text-align: center; color: var(--ink-2); }
 
   .card {
-    background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer;
+    background: #fff; border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
     transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
     display: block; min-width: 0; min-height: 290px;
   }
@@ -84,6 +84,7 @@
   .card .photo {
     flex: 0 0 150px; height: 150px; background: linear-gradient(135deg, #1f3a8a 0%, #3151c8 50%, #6b3df5 100%);
     color: #fff; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; position: relative; overflow: hidden;
+    border-radius: 10px 10px 0 0;
   }
   .card .photo img.streetview {
     position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;
