@@ -54,7 +54,7 @@
   }
   .filter-pill.open .pill-popover { display: block; }
   /* Rightmost pill: anchor its popover to the right edge so it opens leftward and stays in the viewport */
-  #pill-listed .pill-popover { left: auto; right: 0; }
+  #pill-listed .pill-popover, #pill-beds .pill-popover { left: auto; right: 0; }
   .pill-popover label.row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 13px; font-weight: 500; cursor: pointer; }
   .pill-popover label.row:hover { background: var(--blue-soft); border-radius: 4px; }
   .pill-popover input[type=checkbox] { accent-color: var(--blue); }
@@ -113,6 +113,7 @@
   .card .price { font-size: 16px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); margin-bottom: 2px; }
   .card .units-line { font-size: 13px; color: var(--ink-2); margin-bottom: 4px; }
   .card .nb { font-size: 12px; font-weight: 600; color: var(--blue); margin-bottom: 6px; }
+  .card .beds-line { font-size: 12px; font-weight: 700; color: var(--blue); margin-bottom: 4px; }
   .card .statuses { font-size: 11px; color: var(--ink-2); display: flex; gap: 4px; flex-wrap: wrap; }
   .card .statuses .tag { background: var(--bg); padding: 2px 7px; border-radius: 4px; }
   .card .actions { display: flex; gap: 6px; margin-top: 10px; }
@@ -192,6 +193,17 @@
         <label class="row"><input type="radio" name="listed" value="no"> Not recently advertised</label>
       </div>
     </div>
+    <div class="filter-pill" id="pill-beds">
+      Beds<span class="caret">▾</span>
+      <div class="pill-popover">
+        <label class="row"><input type="checkbox" name="beds" value="0"> Studio</label>
+        <label class="row"><input type="checkbox" name="beds" value="1"> 1 bed</label>
+        <label class="row"><input type="checkbox" name="beds" value="2"> 2 beds</label>
+        <label class="row"><input type="checkbox" name="beds" value="3"> 3 beds</label>
+        <label class="row"><input type="checkbox" name="beds" value="4"> 4+ beds</label>
+        <div style="font-size:11px;color:var(--ink-2);margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">Bedroom data comes from recent listings — this also limits results to advertised buildings.</div>
+      </div>
+    </div>
   </div>
 </header>
 <main>
@@ -245,6 +257,7 @@
   ]);
   const listingCounts = listingsBlob.counts || {};
   const listingPrices = listingsBlob.prices || {};
+  const listingBeds = listingsBlob.beds || {};
 
   // ---------- markers ----------
   const cluster = L.markerClusterGroup({
@@ -385,6 +398,25 @@
     applyFilters();
   }));
 
+  // beds checkboxes
+  document.querySelectorAll('input[name="beds"]').forEach(cb => cb.addEventListener('change', () => {
+    const pill = document.getElementById('pill-beds');
+    const n = document.querySelectorAll('input[name="beds"]:checked').length;
+    pill.classList.toggle('active', n > 0);
+    let badge = pill.querySelector('.count-badge');
+    if (n > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'count-badge';
+        pill.insertBefore(badge, pill.querySelector('.caret'));
+      }
+      badge.textContent = n;
+    } else if (badge) {
+      badge.remove();
+    }
+    applyFilters();
+  }));
+
   // search
   let qTimer;
   document.getElementById('q').addEventListener('input', () => {
@@ -398,6 +430,7 @@
     const boroughs = new Set([...document.querySelectorAll('#borough-list input:checked')].map(c => c.dataset.b));
     const selectedNbs = new Set([...nbListEl.querySelectorAll('input:checked')].map(c => c.value));
     const listedMode = document.querySelector('input[name="listed"]:checked').value;
+    const selectedBeds = new Set([...document.querySelectorAll('input[name="beds"]:checked')].map(c => +c.value));
     const q = document.getElementById('q').value.trim().toUpperCase();
 
     filtered = [];
@@ -409,6 +442,10 @@
       const listed = listingCounts[rec.bbl] || 0;
       if (listedMode === 'yes' && !listed) continue;
       if (listedMode === 'no' && listed) continue;
+      if (selectedBeds.size) {
+        const bb = listingBeds[rec.bbl];
+        if (!bb || !bb.some(n => selectedBeds.has(n))) continue;
+      }
       if (q) {
         const inAddr = rec.a && rec.a.toUpperCase().includes(q);
         const inZip = rec.z && rec.z.includes(q);
@@ -462,10 +499,15 @@
       : '');
   }
 
+  function bedsLabel(arr) {
+    return arr.map(n => n === 0 ? 'Studio' : (n >= 4 ? '4+' : n) + ' BR').join(' · ');
+  }
+
   function cardHtml(rec) {
     const borough = rec.b === 'M' ? 'MANHATTAN' : 'BROOKLYN';
     const listed = listingCounts[rec.bbl] || 0;
     const price = listingPrices[rec.bbl];
+    const beds = listingBeds[rec.bbl];
     const listedHtml = listed > 0 ? `<span class="listed-pill">Recently advertised</span>` : `<span></span>`;
     const stats = [];
     if (rec.u != null) stats.push(`${rec.u} units`);
@@ -487,6 +529,7 @@
       <div class="body">
         ${rec.nb ? `<div class="nb">${esc(rec.nb)}</div>` : ''}
         ${listed > 0 ? `<div class="price">${price ? '$' + price.toLocaleString() + '/mo · ' : ''}Recently advertised on Zumper · ${listed} listing${listed===1?'':'s'}</div>` : ''}
+        ${beds && beds.length ? `<div class="beds-line">${bedsLabel(beds)} available</div>` : ''}
         <div class="units-line">${stats.join(' · ')}</div>
         <div class="statuses">${statuses}</div>
         <div class="actions">

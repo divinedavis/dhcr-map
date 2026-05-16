@@ -6,7 +6,8 @@ Sources (Manhattan + Brooklyn only):
   - RentHop search pages
 
 Listings whose address doesn't match a known DHCR building are dropped.
-Output: listings.json — {counts:{bbl:n}, urls:{bbl:url}, prices:{bbl:min_rent}}
+Output: listings.json — {counts, urls, prices, beds} keyed by bbl
+  (beds: sorted bedroom counts available, 0=studio, capped at 4 for "4+")
 """
 import asyncio
 import json
@@ -104,7 +105,7 @@ async def fetch_page(ctx, url, *, wait_ms=2500, timeout_ms=25000):
 
 
 async def scrape_zumper(ctx, area_slug: str, max_pages=80, log=print):
-    """Return list of (address, url) tuples from Zumper rentals search."""
+    """Return a list of listing dicts {addr,url,price,bmin,bmax} from Zumper."""
     seen_addrs = set()
     out = []
     base = f"https://www.zumper.com/apartments-for-rent/{area_slug}"
@@ -114,13 +115,13 @@ async def scrape_zumper(ctx, area_slug: str, max_pages=80, log=print):
         if status != 200:
             log(f"  zumper {area_slug} p{page_n} status={status}, stopping")
             break
-        # Zumper embeds listings in the page as JSON. Each entry has
-        # "listing_id":NUMBER ... "address":"..." ... and a price field.
+        # Zumper embeds listings in the page as JSON. Each entry has "listing_id":NUMBER
+        # ... "address":"..." plus min_price / min_bedrooms / max_bedrooms.
         # Building the URL via /listing/<id> works (Zumper 301-redirects to the canonical building page).
         pairs = []
         # Each listing is a JSON object starting at "listing_id". Bound the window to the
-        # next listing_id so the address + price we read belong to this listing. Zumper
-        # carries "min_price" ~1.5-3.6k chars into the object (the cheapest unit advertised).
+        # next listing_id so every field we read belongs to this listing. Zumper carries
+        # "min_price" ~1.5-3.6k chars into the object (the cheapest unit advertised).
         id_matches = list(re.finditer(r'"listing_id":(\d+)', html))
         for idx, m in enumerate(id_matches):
             lid = m.group(1)
@@ -129,29 +130,35 @@ async def scrape_zumper(ctx, area_slug: str, max_pages=80, log=print):
             am = re.search(r'"address":"([^"]{5,80})"', window)
             if not am:
                 continue
-            addr = am.group(1)
             pm = re.search(r'"min_price":(\d{3,7})', window)
-            price = int(pm.group(1)) if pm else None
-            pairs.append((addr, f"https://www.zumper.com/listing/{lid}", price))
-        # Add any bare addresses not already paired (fallback, no url/price)
+            bn = re.search(r'"min_bedrooms":(\d+)', window)
+            bx = re.search(r'"max_bedrooms":(\d+)', window)
+            pairs.append({
+                "addr": am.group(1),
+                "url": f"https://www.zumper.com/listing/{lid}",
+                "price": int(pm.group(1)) if pm else None,
+                "bmin": int(bn.group(1)) if bn else None,
+                "bmax": int(bx.group(1)) if bx else None,
+            })
+        # Add any bare addresses not already paired (fallback, no url/price/beds)
         bare_addrs = set(re.findall(r'"address":"([^"]{5,80})"', html))
-        addrs_with_url = {a for a, _, _ in pairs}
+        addrs_with_url = {p["addr"] for p in pairs}
         for a in bare_addrs - addrs_with_url:
-            pairs.append((a, None, None))
-        new = [(a, u, pr) for a, u, pr in pairs if a not in seen_addrs]
+            pairs.append({"addr": a, "url": None, "price": None, "bmin": None, "bmax": None})
+        new = [p for p in pairs if p["addr"] not in seen_addrs]
         log(f"  zumper {area_slug} p{page_n}: {len(pairs)} addrs ({len(new)} new, "
-            f"{sum(1 for _,u,_ in new if u)} with URL, {sum(1 for _,_,pr in new if pr)} with price)")
+            f"{sum(1 for p in new if p['url'])} with URL, {sum(1 for p in new if p['price'])} with price)")
         if not new:
             break
-        for a, u, pr in new:
-            seen_addrs.add(a)
-            out.append((a, u, pr))
+        for p in new:
+            seen_addrs.add(p["addr"])
+            out.append(p)
         await asyncio.sleep(1.2)
     return out
 
 
 async def scrape_renthop(ctx, area_path: str, max_pages=20, log=print):
-    """Return list of (address, url) tuples from RentHop. URLs not currently extracted."""
+    """Return a list of listing dicts from RentHop (addr only; url/price/beds not extracted)."""
     seen = set()
     out = []
     base = f"https://www.renthop.com/{area_path}"
@@ -170,7 +177,7 @@ async def scrape_renthop(ctx, area_path: str, max_pages=20, log=print):
             break
         seen.update(addrs)
         for a in new:
-            out.append((a, None, None))
+            out.append({"addr": a, "url": None, "price": None, "bmin": None, "bmax": None})
         await asyncio.sleep(1.2)
     return out
 
@@ -192,6 +199,7 @@ async def main():
     counts = {}  # bbl -> count
     urls = {}    # bbl -> first known Zumper URL for that building
     prices = {}  # bbl -> lowest advertised rent seen for that building
+    beds = {}    # bbl -> set of bedroom counts available (0=studio, capped at 4)
     matched_addrs = set()
 
     async with async_playwright() as p:
@@ -206,7 +214,7 @@ async def main():
             timezone_id="America/New_York",
         )
 
-        all_listings = []  # list of (addr, url)
+        all_listings = []  # list of listing dicts {addr,url,price,bmin,bmax}
         for area in ["manhattan-ny", "brooklyn-ny"]:
             log(f"== Zumper {area} ==")
             try:
@@ -227,8 +235,8 @@ async def main():
 
     log(f"raw listings collected: {len(all_listings)}")
 
-    for raw, url, price in all_listings:
-        norm = normalize_addr(raw)
+    for lst in all_listings:
+        norm = normalize_addr(lst["addr"])
         if not norm:
             continue
         bbl = addr_idx.get(norm)
@@ -242,20 +250,29 @@ async def main():
         if not bbl:
             continue
         counts[bbl] = counts.get(bbl, 0) + 1
-        if url and bbl not in urls:
-            urls[bbl] = url
+        if lst["url"] and bbl not in urls:
+            urls[bbl] = lst["url"]
         # keep the lowest sane rent seen for the building
+        price = lst["price"]
         if price and 500 <= price <= 50000:
             if bbl not in prices or price < prices[bbl]:
                 prices[bbl] = price
+        # union of bedroom counts the building's listings cover (0=studio, 4 means 4+)
+        bmin, bmax = lst["bmin"], lst["bmax"]
+        if bmin is not None and bmax is not None and 0 <= bmin <= bmax <= 12:
+            s = beds.setdefault(bbl, set())
+            for n in range(bmin, min(bmax, 4) + 1):
+                s.add(n)
         matched_addrs.add(norm)
 
     log(f"matched listings: {sum(counts.values())} across {len(counts)} buildings")
     log(f"buildings with direct Zumper URLs: {len(urls)}")
     log(f"buildings with a rent price: {len(prices)}")
+    log(f"buildings with bedroom data: {len(beds)}")
     log(f"unique normalized matched addresses: {len(matched_addrs)}")
 
-    payload = {"updated": int(time.time()), "counts": counts, "urls": urls, "prices": prices}
+    payload = {"updated": int(time.time()), "counts": counts, "urls": urls, "prices": prices,
+               "beds": {b: sorted(s) for b, s in beds.items()}}
     OUT.write_text(json.dumps(payload, separators=(",", ":")))
     LOG.write_text("\n".join(log_lines) + "\n")
     print(f"wrote {OUT} ({len(counts)} buildings with listings)")
