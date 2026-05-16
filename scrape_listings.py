@@ -118,16 +118,19 @@ async def scrape_zumper(ctx, area_slug: str, max_pages=80, log=print):
         # "listing_id":NUMBER ... "address":"..." ... and a price field.
         # Building the URL via /listing/<id> works (Zumper 301-redirects to the canonical building page).
         pairs = []
-        # For each listing object, grab a window after the id and pull address + price from it.
-        for m in re.finditer(r'"listing_id":(\d+)', html):
+        # Each listing is a JSON object starting at "listing_id". Bound the window to the
+        # next listing_id so the address + price we read belong to this listing. Zumper
+        # carries "min_price" ~1.5-3.6k chars into the object (the cheapest unit advertised).
+        id_matches = list(re.finditer(r'"listing_id":(\d+)', html))
+        for idx, m in enumerate(id_matches):
             lid = m.group(1)
-            window = html[m.start():m.start() + 800]
+            end = id_matches[idx + 1].start() if idx + 1 < len(id_matches) else m.start() + 6000
+            window = html[m.start():end]
             am = re.search(r'"address":"([^"]{5,80})"', window)
             if not am:
                 continue
             addr = am.group(1)
-            # min_price preferred (cheapest unit in a multi-unit building), else price
-            pm = re.search(r'"min_price":(\d{3,7})', window) or re.search(r'"price":(\d{3,7})', window)
+            pm = re.search(r'"min_price":(\d{3,7})', window)
             price = int(pm.group(1)) if pm else None
             pairs.append((addr, f"https://www.zumper.com/listing/{lid}", price))
         # Add any bare addresses not already paired (fallback, no url/price)
